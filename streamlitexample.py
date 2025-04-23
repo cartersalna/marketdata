@@ -10,6 +10,13 @@ st.title("📄 View Rack, NYMEX, and Platts Data")
 
 st.markdown("Upload **Rack Pricing CSV**, **NYMEX CSV**, and **Platts CSV** to view the raw data.")
 
+rack_df = None
+nymex_df = None
+platts_df = None
+
+if 'merged_df' not in st.session_state:
+    st.session_state.merged_df = None
+
 rack_file = st.file_uploader("Upload OPIS Rack Data", type=["csv"])
 ##nymex_file = st.file_uploader("Upload NYMEX Data", type=["csv"])
 platts_file = st.file_uploader("Upload Platts Data", type=["csv"])
@@ -70,6 +77,9 @@ with col1:
     nymex_file = st.file_uploader("Upload NYMEX Data", type=["csv"], key="nymex")
 
 with col2:
+    st.write("")
+    st.write("")
+    st.write("")
     pull_data = st.button("📥 Pull NYMEX Data")
 
 nymex_df = None  # Initialize
@@ -168,46 +178,60 @@ if platts_file:
     # Display the dataframe
     st.dataframe(platts_df)
 
+if 'merged_df' not in st.session_state:
+    st.session_state.merged_df = None
 
-if rack_file is not None and nymex_df is not None and platts_df is not None:
-    
-    #FILTER POSSIBLE ISSUES with nymex fetch
-    print(nymex_df)
-    nymex_df = nymex_df.dropna(subset=['DATE'])
-    nymex_df = nymex_df[nymex_df['DATE'].apply(lambda x: isinstance(x, str) and len(x) > 0)]
+generate_button = st.button("Generate", key="generate_button")
 
-    # Merge all three dataframes on 'DATE'
-    merged_df = pd.merge(rack_df, nymex_df, on="DATE", how="inner")
-    merged_df = pd.merge(merged_df, platts_df, on="DATE", how="inner")
+if generate_button and any([rack_df is not None, nymex_df is not None, platts_df is not None]):
+    dfs = []
 
-    # Convert unified DATE to datetime object for plotting
-    merged_df["DATE"] = pd.to_datetime(merged_df["DATE"], format='%m-%d-%y', errors='coerce')
-    merged_df = merged_df.sort_values(by="DATE")
+    if rack_df is not None:
+        rack_df = rack_df.dropna(subset=['DATE'])
+        rack_df = rack_df[rack_df['DATE'].apply(lambda x: isinstance(x, str) and len(x) > 0)]
+        dfs.append(rack_df)
 
-    # Only divide OPIS, PLATTS, and Marathon branded/unbranded columns by 100
-    for col in merged_df.columns:
-        if col != "DATE" and (
-            "RACK" in col or "PLATTS" in col or "MARATHON" in col or "branded" in col or "unbranded" in col
-        ) and merged_df[col].dtype in ['float64', 'int64']:
-            merged_df[col] = merged_df[col] / 100
+    if nymex_df is not None:
+        nymex_df = nymex_df.dropna(subset=['DATE'])
+        nymex_df = nymex_df[nymex_df['DATE'].apply(lambda x: isinstance(x, str) and len(x) > 0)]
+        dfs.append(nymex_df)
 
-    # Drop columns that are completely empty (NaN)
-    merged_df = merged_df.dropna(axis=1, how='all')
+    if platts_df is not None:
+        platts_df = platts_df.dropna(subset=['DATE'])
+        platts_df = platts_df[platts_df['DATE'].apply(lambda x: isinstance(x, str) and len(x) > 0)]
+        dfs.append(platts_df)
+
+    if dfs:
+        from functools import reduce
+        merged_df = reduce(lambda left, right: pd.merge(left, right, on="DATE", how="inner"), dfs)
+
+        merged_df["DATE"] = pd.to_datetime(merged_df["DATE"], format='%m-%d-%y', errors='coerce')
+        merged_df = merged_df.sort_values(by="DATE")
+
+        for col in merged_df.columns:
+            if col != "DATE" and (
+                "RACK" in col or "PLATTS" in col or "MARATHON" in col or "branded" in col or "unbranded" in col
+            ) and merged_df[col].dtype in ['float64', 'int64']:
+                merged_df[col] = merged_df[col] / 100
+
+        merged_df = merged_df.dropna(axis=1, how='all')
+        st.session_state.merged_df = merged_df  # Save merged data in session state
+    else:
+        st.session_state.merged_df = None
+
+
+# If we have merged data, let the user interact with it
+if st.session_state.merged_df is not None:
+    merged_df = st.session_state.merged_df
 
     st.subheader("📊 Merged Data (Rack + NYMEX + Platts)")
     st.dataframe(merged_df)
 
-    # Let the user select multiple columns to compare
     columns = merged_df.columns.tolist()
     columns.remove('DATE')
-
-    # Initial selection for the first column
     selected_columns = st.multiselect("Select columns to compare", columns, default=[columns[0]])
 
-    # Ensure there's at least one date for the slider
     available_dates = merged_df["DATE"].dt.date.unique().tolist()
-
-    # Handle case where no valid dates are available
     if available_dates:
         start_date, end_date = st.select_slider(
             "Select Date Range for Graph",
@@ -221,9 +245,9 @@ if rack_file is not None and nymex_df is not None and platts_df is not None:
     filtered_df = merged_df[
         (merged_df["DATE"].dt.date >= start_date) & (merged_df["DATE"].dt.date <= end_date)
     ]
+
     line_style = st.selectbox("Select Line Style", ["solid", "dash", "dot"], index=0)
     line_width = st.slider("Select Line Width", 1, 10, 2)
-
 
     if selected_columns and not filtered_df.empty:
         fig = px.line(
@@ -233,9 +257,7 @@ if rack_file is not None and nymex_df is not None and platts_df is not None:
             labels={"DATE": "Date", "value": "Price (USD)", "variable": "Series"},
             title="Comparison of Selected Metrics"
         )
-        fig.update_traces(
-        line=dict(dash=line_style, width=line_width)  # Apply line style and width
-        )
+        fig.update_traces(line=dict(dash=line_style, width=line_width))
         fig.update_layout(legend_title_text="Legend", hovermode="x unified")
         fig.update_xaxes(tickformat="%m-%d-%y")
         st.plotly_chart(fig, use_container_width=True)
