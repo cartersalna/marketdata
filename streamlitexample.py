@@ -67,9 +67,40 @@ if rack_file:
         st.error("Rack data missing 'DATE' column.")
         st.stop()
 
-    st.dataframe(rack_df)
+    with st.expander("View OPIS Rack Data 🔽"):
+        st.dataframe(rack_df)
+    
+if platts_file:
+    st.subheader("📈 Platts Data")
 
-st.subheader("📈 NYMEX Data")
+    # Convert the uploaded file to a StringIO object (in-memory file object)
+    file_content = platts_file.getvalue().decode("utf-8")
+    file_obj = StringIO(file_content)
+
+    # Use the function to determine how many rows to skip
+    skip_count = find_skip_count(file_obj)
+
+    # Now read the CSV with the skiprows value calculated above
+    file_obj.seek(0)  # Reset file pointer
+    platts_df = pd.read_csv(file_obj, skiprows=skip_count)
+
+    # Strip column names of extra spaces
+    platts_df.columns = platts_df.columns.str.strip()
+
+    # Find the column that contains the date
+    date_col = next((col for col in platts_df.columns if 'date' in col.lower()), None)
+
+    if date_col:
+        platts_df[date_col] = platts_df[date_col].astype(str).apply(unify_date_format)
+        platts_df = platts_df.dropna(subset=[date_col])
+        platts_df = platts_df.rename(columns={date_col: 'DATE'})
+    else:
+        st.error("Could not find a 'DATE' column in the Platts data.")
+        st.stop()
+
+    # Display the dataframe
+    with st.expander("View Platts Data 🔽"):
+        st.dataframe(platts_df)
 
 col1, col2 = st.columns([2, 1])
 
@@ -103,7 +134,9 @@ if nymex_file:
         st.stop()
 
     st.success("✅ NYMEX CSV Uploaded Successfully")
-    st.dataframe(nymex_df)
+    with st.expander("View NYMEX Data 🔽 "):
+        st.dataframe(nymex_df)
+
 
 elif pull_data or "pull_nymex" in st.session_state:
     st.session_state["pull_nymex"] = True
@@ -127,18 +160,18 @@ elif pull_data or "pull_nymex" in st.session_state:
                 try:
                     ulsd = yf.download("HO=F", start=start_date, end=end_date)
 
-                    if not ulsd.empty:
+                    if ulsd is not None and not ulsd.empty:
                         ulsd.reset_index(inplace=True)
                         ulsd['DATE'] = ulsd['Date'].dt.strftime('%m-%d-%y')
                         ulsd = ulsd[['DATE', 'Close']].rename(columns={'Close': 'NYMEX_ULSD'})
-                        nymex_df = ulsd
 
-                        # 🔥 Remove the junk second row
-                        nymex_df.columns = ['_'.join(col) for col in nymex_df.columns]
-                        nymex_df = nymex_df.rename(columns={'DATE_': 'DATE'})
+                        ulsd.columns = ['_'.join(col) for col in ulsd.columns]
+                        ulsd = ulsd.rename(columns={'DATE_': 'DATE'})
+                        st.session_state["nymex_df"] = ulsd
 
                         st.success("✅ Fetched NYMEX ULSD prices from Yahoo Finance.")
-                        st.dataframe(nymex_df)
+                        st.dataframe(ulsd)
+                        
                     else:
                         st.warning("No data returned for the selected date range.")
                 except Exception as e:
@@ -147,41 +180,12 @@ elif pull_data or "pull_nymex" in st.session_state:
     else:
         st.info("Please select both start and end dates.")
 
-if platts_file:
-    st.subheader("📈 Platts Data")
-
-    # Convert the uploaded file to a StringIO object (in-memory file object)
-    file_content = platts_file.getvalue().decode("utf-8")
-    file_obj = StringIO(file_content)
-
-    # Use the function to determine how many rows to skip
-    skip_count = find_skip_count(file_obj)
-
-    # Now read the CSV with the skiprows value calculated above
-    file_obj.seek(0)  # Reset file pointer
-    platts_df = pd.read_csv(file_obj, skiprows=skip_count)
-
-    # Strip column names of extra spaces
-    platts_df.columns = platts_df.columns.str.strip()
-
-    # Find the column that contains the date
-    date_col = next((col for col in platts_df.columns if 'date' in col.lower()), None)
-
-    if date_col:
-        platts_df[date_col] = platts_df[date_col].astype(str).apply(unify_date_format)
-        platts_df = platts_df.dropna(subset=[date_col])
-        platts_df = platts_df.rename(columns={date_col: 'DATE'})
-    else:
-        st.error("Could not find a 'DATE' column in the Platts data.")
-        st.stop()
-
-    # Display the dataframe
-    st.dataframe(platts_df)
 
 if 'merged_df' not in st.session_state:
     st.session_state.merged_df = None
 
-generate_button = st.button("Generate", key="generate_button")
+generate_button = st.button("Merge Data (by date) & Generate Graph ->", key="generate_button")
+nymex_df = st.session_state.get("nymex_df")
 
 if generate_button and any([rack_df is not None, nymex_df is not None, platts_df is not None]):
     dfs = []
@@ -191,6 +195,7 @@ if generate_button and any([rack_df is not None, nymex_df is not None, platts_df
         rack_df = rack_df[rack_df['DATE'].apply(lambda x: isinstance(x, str) and len(x) > 0)]
         dfs.append(rack_df)
 
+    
     if nymex_df is not None:
         nymex_df = nymex_df.dropna(subset=['DATE'])
         nymex_df = nymex_df[nymex_df['DATE'].apply(lambda x: isinstance(x, str) and len(x) > 0)]
