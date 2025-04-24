@@ -5,6 +5,7 @@ from dateutil import parser
 import io
 from io import StringIO
 import yfinance as yf
+import os
 
 st.set_page_config(page_title="Rack vs NYMEX vs Platts Viewer", layout="wide")
 st.title("📄 View Rack, NYMEX, and Platts Data")
@@ -53,6 +54,11 @@ if rack_file is not None:
         skip_rows = find_skip_count(rack_file, header_column="DATE")
         rack_file.seek(0)
         selected_df = pd.read_csv(rack_file, skiprows=skip_rows)
+
+        # Prefix column names with the filename (without extension)
+        prefix = os.path.splitext(rack_file.name)[0]  # "OPIS ULSC2.csv" -> "OPIS ULSC2"
+        selected_df.columns = [f"{prefix} {col}" if col != "DATE" else "DATE" for col in selected_df.columns]
+
         st.success("✅ CSV uploaded and parsed successfully.")
 
     elif file_name.endswith((".xls", ".xlsx")):
@@ -73,6 +79,9 @@ if rack_file is not None:
             # Re-read the StringIO with skip
             csv_buffer.seek(0)
             selected_df = pd.read_csv(csv_buffer, skiprows=skip_rows)
+
+             # Prefix columns using sheet name (except "DATE")
+            selected_df.columns = [f"{sheet_choice} {col}" if col != "DATE" else "DATE" for col in selected_df.columns]
             st.success(f"✅ Excel sheet '{sheet_choice}' parsed successfully as CSV.")
 
 if selected_df is not None:
