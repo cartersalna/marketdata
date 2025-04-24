@@ -2,6 +2,7 @@ import streamlit as st
 import pandas as pd
 import plotly.express as px
 from dateutil import parser
+import io
 from io import StringIO
 import yfinance as yf
 
@@ -9,17 +10,6 @@ st.set_page_config(page_title="Rack vs NYMEX vs Platts Viewer", layout="wide")
 st.title("📄 View Rack, NYMEX, and Platts Data")
 
 st.markdown("Upload **Rack Pricing CSV**, **NYMEX CSV**, and **Platts CSV** to view the raw data.")
-
-rack_df = None
-nymex_df = None
-platts_df = None
-
-if 'merged_df' not in st.session_state:
-    st.session_state.merged_df = None
-
-rack_file = st.file_uploader("Upload OPIS Rack Data", type=["csv"])
-##nymex_file = st.file_uploader("Upload NYMEX Data", type=["csv"])
-platts_file = st.file_uploader("Upload Platts Data", type=["csv"])
 
 def unify_date_format(date_string, output_format='%m-%d-%y'):
     try:
@@ -44,32 +34,82 @@ def find_skip_count(file_obj, header_column="DATE"):
 
     return skip_count - 1  # Subtract 1 because we should skip the lines before the header row
 
+rack_df = None
+nymex_df = None
+platts_df = None
+
+if 'merged_df' not in st.session_state:
+    st.session_state.merged_df = None
+
+rack_file = st.file_uploader("Upload OPIS Rack Data", type=["csv", "xls", "xlsx"])
+
+selected_df = None
+
+if rack_file is not None:
+    file_name = rack_file.name.lower()
+
+    if file_name.endswith(".csv"):
+        # CSV file: call find_skip_count directly
+        skip_rows = find_skip_count(rack_file, header_column="DATE")
+        rack_file.seek(0)
+        selected_df = pd.read_csv(rack_file, skiprows=skip_rows)
+        st.success("✅ CSV uploaded and parsed successfully.")
+
+    elif file_name.endswith((".xls", ".xlsx")):
+        # Excel file: let user select a sheet
+        xl = pd.ExcelFile(rack_file)
+        sheet_choice = st.selectbox("Select a sheet to treat as CSV", xl.sheet_names)
+
+        if sheet_choice:
+            # Convert selected sheet to CSV in-memory
+            df_sheet = xl.parse(sheet_name=sheet_choice, header=None)
+            csv_buffer = io.StringIO()
+            df_sheet.to_csv(csv_buffer, index=False, header=False)
+            csv_buffer.seek(0)
+
+            # Call find_skip_count directly on the StringIO buffer (no BytesIO)
+            skip_rows = find_skip_count(csv_buffer, header_column="DATE")
+
+            # Re-read the StringIO with skip
+            csv_buffer.seek(0)
+            selected_df = pd.read_csv(csv_buffer, skiprows=skip_rows)
+            st.success(f"✅ Excel sheet '{sheet_choice}' parsed successfully as CSV.")
+
+if selected_df is not None:
+    st.write("📊 Preview of uploaded data:")
+    st.dataframe(selected_df)
+
+##nymex_file = st.file_uploader("Upload NYMEX Data", type=["csv"])
+platts_file = st.file_uploader("Upload Platts Data", type=["csv"])
+
+col1, col2 = st.columns([2, 1])
+
+with col1:
+    nymex_file = st.file_uploader("Upload NYMEX Data", type=["csv"], key="nymex")
+
+with col2:
+    st.write("")
+    st.write("")
+    st.write("")
+    pull_data = st.button("📥 Pull NYMEX Data")
+
+nymex_df = None  # Initialize
+
 # Assuming you have the file and using this function
-if rack_file:
-    st.subheader("📊 OPIS Rack Data")
+if selected_df is not None:
+    st.write("📊 Preview of uploaded data:")
+    with st.expander("View OPIS Rack Data 🔽"):
+        st.dataframe(selected_df)
 
-    # Convert the uploaded file to a StringIO object (in-memory file object)
-    file_content = rack_file.getvalue().decode("utf-8")
-    file_obj = StringIO(file_content)
-
-    # Use the function to determine how many rows to skip
-    skip_count = find_skip_count(file_obj)
-
-    # Now read the CSV with the skiprows value calculated above
-    file_obj.seek(0)  # Reset file pointer
-    rack_df = pd.read_csv(file_obj, skiprows=skip_count)
-
-    # Process the 'DATE' column
-    if 'DATE' in rack_df.columns:
-        rack_df['DATE'] = rack_df['DATE'].astype(str).apply(unify_date_format)
-        rack_df = rack_df.dropna(subset=['DATE'])
+    if 'DATE' in selected_df.columns:
+        selected_df['DATE'] = selected_df['DATE'].astype(str).apply(unify_date_format)
+        selected_df = selected_df.dropna(subset=['DATE'])
     else:
-        st.error("Rack data missing 'DATE' column.")
+        st.error("Uploaded data missing 'DATE' column.")
         st.stop()
 
-    with st.expander("View OPIS Rack Data 🔽"):
-        st.dataframe(rack_df)
-    
+rack_df = selected_df
+
 if platts_file:
     st.subheader("📈 Platts Data")
 
@@ -102,18 +142,6 @@ if platts_file:
     with st.expander("View Platts Data 🔽"):
         st.dataframe(platts_df)
 
-col1, col2 = st.columns([2, 1])
-
-with col1:
-    nymex_file = st.file_uploader("Upload NYMEX Data", type=["csv"], key="nymex")
-
-with col2:
-    st.write("")
-    st.write("")
-    st.write("")
-    pull_data = st.button("📥 Pull NYMEX Data")
-
-nymex_df = None  # Initialize
 
 if nymex_file:
     file_content = nymex_file.getvalue().decode("utf-8")
@@ -170,7 +198,7 @@ elif pull_data or "pull_nymex" in st.session_state:
                         st.session_state["nymex_df"] = ulsd
 
                         st.success("✅ Fetched NYMEX ULSD prices from Yahoo Finance.")
-                        st.dataframe(ulsd)
+                        st.dataframe(st.session_state["nymex_df"])
                         
                     else:
                         st.warning("No data returned for the selected date range.")
@@ -195,7 +223,6 @@ if generate_button and any([rack_df is not None, nymex_df is not None, platts_df
         rack_df = rack_df[rack_df['DATE'].apply(lambda x: isinstance(x, str) and len(x) > 0)]
         dfs.append(rack_df)
 
-    
     if nymex_df is not None:
         nymex_df = nymex_df.dropna(subset=['DATE'])
         nymex_df = nymex_df[nymex_df['DATE'].apply(lambda x: isinstance(x, str) and len(x) > 0)]
@@ -223,7 +250,6 @@ if generate_button and any([rack_df is not None, nymex_df is not None, platts_df
         st.session_state.merged_df = merged_df  # Save merged data in session state
     else:
         st.session_state.merged_df = None
-
 
 # If we have merged data, let the user interact with it
 if st.session_state.merged_df is not None:
