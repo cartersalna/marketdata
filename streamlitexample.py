@@ -38,6 +38,7 @@ def find_skip_count(file_obj, header_column="DATE"):
 rack_df = None
 nymex_df = None
 platts_df = None
+merged_sheet_df = None
 
 if 'merged_df' not in st.session_state:
     st.session_state.merged_df = None
@@ -62,27 +63,37 @@ if rack_file is not None:
         st.success("✅ CSV uploaded and parsed successfully.")
 
     elif file_name.endswith((".xls", ".xlsx")):
-        # Excel file: let user select a sheet
         xl = pd.ExcelFile(rack_file)
-        sheet_choice = st.selectbox("Select a sheet to treat as CSV", xl.sheet_names)
+        sheet_choices = st.multiselect("Select a sheet to treat as CSV", xl.sheet_names)
 
-        if sheet_choice:
-            # Convert selected sheet to CSV in-memory
-            df_sheet = xl.parse(sheet_name=sheet_choice, header=None)
-            csv_buffer = io.StringIO()
-            df_sheet.to_csv(csv_buffer, index=False, header=False)
-            csv_buffer.seek(0)
+        dataframes_to_merge = []
+        if sheet_choices:
+            for sheet_choice in sheet_choices:
+                df_sheet = xl.parse(sheet_name=sheet_choice, header=None)
+               
+                # Find the first row that contains the header (row with 'DATE')
+                header_row_idx = df_sheet[df_sheet.apply(lambda row: row.astype(str).str.contains("DATE", case=False).any(), axis=1)].index
+                if len(header_row_idx) == 0:
+                    st.error(f"❌ No 'DATE' header found in sheet '{sheet_choice}'.")
+                    continue
 
-            # Call find_skip_count directly on the StringIO buffer (no BytesIO)
-            skip_rows = find_skip_count(csv_buffer, header_column="DATE")
+                skip_rows = header_row_idx[0]
+                df_sheet = xl.parse(sheet_name=sheet_choice, skiprows=skip_rows)
+                # Rename columns: prefix except 'DATE'
+                df_sheet.columns = [f"{sheet_choice} {col}" if col != "DATE" else "DATE" for col in df_sheet.columns]
 
-            # Re-read the StringIO with skip
-            csv_buffer.seek(0)
-            selected_df = pd.read_csv(csv_buffer, skiprows=skip_rows)
+                dataframes_to_merge.append(df_sheet)
+                st.success(f"✅ Excel sheet '{sheet_choice}' parsed successfully.")
 
-             # Prefix columns using sheet name (except "DATE")
-            selected_df.columns = [f"{sheet_choice} {col}" if col != "DATE" else "DATE" for col in selected_df.columns]
-            st.success(f"✅ Excel sheet '{sheet_choice}' parsed successfully as CSV.")
+            if dataframes_to_merge:
+                from functools import reduce
+                st.write(dataframes_to_merge)
+                merged_sheet_df = reduce(lambda left, right: pd.merge(left, right, on="DATE", how="outer"), dataframes_to_merge)
+
+                st.success(f"✅ Merged {len(sheet_choices)} sheets successfully.")
+                st.write("📊 Merged Data Preview:")
+                st.dataframe(merged_sheet_df)
+
 
 if selected_df is not None:
     st.write("📊 Preview of uploaded data:")
@@ -117,7 +128,7 @@ if selected_df is not None:
         st.error("Uploaded data missing 'DATE' column.")
         st.stop()
 
-rack_df = selected_df
+rack_df = merged_sheet_df
 
 if platts_file:
     st.subheader("📈 Platts Data")
@@ -226,15 +237,17 @@ nymex_df = st.session_state.get("nymex_df")
 
 if generate_button and any([rack_df is not None, nymex_df is not None, platts_df is not None]):
     dfs = []
-
+    
     if rack_df is not None:
         rack_df = rack_df.dropna(subset=['DATE'])
-        rack_df = rack_df[rack_df['DATE'].apply(lambda x: isinstance(x, str) and len(x) > 0)]
+        rack_df.columns = rack_df.columns.str.strip().str.upper()
+        #rack_df = rack_df[rack_df['DATE'].apply(lambda x: isinstance(x, str) and len(x) > 0)]
         dfs.append(rack_df)
+        
 
     if nymex_df is not None:
+        nymex_df.columns = nymex_df.columns.str.strip().str.upper()
         nymex_df = nymex_df.dropna(subset=['DATE'])
-        nymex_df = nymex_df[nymex_df['DATE'].apply(lambda x: isinstance(x, str) and len(x) > 0)]
         dfs.append(nymex_df)
 
     if platts_df is not None:
@@ -243,6 +256,9 @@ if generate_button and any([rack_df is not None, nymex_df is not None, platts_df
         dfs.append(platts_df)
 
     if dfs:
+        for i in range(len(dfs)):
+            dfs[i]['DATE'] = pd.to_datetime(dfs[i]['DATE'], errors='coerce')
+
         from functools import reduce
         merged_df = reduce(lambda left, right: pd.merge(left, right, on="DATE", how="inner"), dfs)
 
@@ -262,15 +278,21 @@ if generate_button and any([rack_df is not None, nymex_df is not None, platts_df
 
 # If we have merged data, let the user interact with it
 if st.session_state.merged_df is not None:
+    
     merged_df = st.session_state.merged_df
-
+    
     st.subheader("📊 Merged Data (Rack + NYMEX + Platts)")
     st.dataframe(merged_df)
 
     columns = merged_df.columns.tolist()
-    columns.remove('DATE')
-    selected_columns = st.multiselect("Select columns to compare", columns, default=[columns[0]])
+    if 'DATE' in columns:
+        columns.remove('DATE')
 
+    if columns:
+        selected_columns = st.multiselect("Select columns to compare", columns, default=[columns[0]])
+    else:
+        st.warning("No columns available for comparison.")
+        st.stop()
     available_dates = merged_df["DATE"].dt.date.unique().tolist()
     if available_dates:
         start_date, end_date = st.select_slider(
