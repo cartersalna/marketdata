@@ -38,8 +38,11 @@ def find_skip_count(file_obj, header_column="DATE"):
 rack_df = None
 nymex_df = None
 platts_df = None
-merged_sheet_df = None
 
+if "merged_sheet_df" in st.session_state:
+    merged_sheet_df = st.session_state["merged_sheet_df"]
+else:
+    merged_sheet_df = None
 if 'merged_df' not in st.session_state:
     st.session_state.merged_df = None
 
@@ -86,13 +89,27 @@ if rack_file is not None:
                 st.success(f"✅ Excel sheet '{sheet_choice}' parsed successfully.")
 
             if dataframes_to_merge:
-                from functools import reduce
-                st.write(dataframes_to_merge)
-                merged_sheet_df = reduce(lambda left, right: pd.merge(left, right, on="DATE", how="outer"), dataframes_to_merge)
+                if st.button("🔗 Merge Selected Sheets"):
+                    from functools import reduce
 
-                st.success(f"✅ Merged {len(sheet_choices)} sheets successfully.")
-                st.write("📊 Merged Data Preview:")
-                st.dataframe(merged_sheet_df)
+                    for i in range(len(dataframes_to_merge)):
+                        dataframes_to_merge[i]['DATE'] = pd.to_datetime(dataframes_to_merge[i]['DATE'], errors='coerce')
+
+                    merged_df = dataframes_to_merge[0]
+
+                    # Merge subsequent dataframes one by one
+                    for df in dataframes_to_merge[1:]:
+                        merged_df = pd.merge(merged_df, df, on="DATE", how="outer")  # Use 'outer' join to keep all dates
+
+                    # Sort by DATE after merging
+                    merged_df = merged_df.sort_values(by="DATE")
+
+                    # Store merged result in session state
+                    st.session_state["merged_sheet_df"] = merged_df
+
+                    st.success(f"✅ Merged {len(dataframes_to_merge)} sheets successfully.")
+                    st.write("📊 Merged Data Preview:")
+                    st.dataframe(st.session_state["merged_sheet_df"])
 
 
 if selected_df is not None:
@@ -128,7 +145,7 @@ if selected_df is not None:
         st.error("Uploaded data missing 'DATE' column.")
         st.stop()
 
-rack_df = merged_sheet_df
+
 
 if platts_file:
     st.subheader("📈 Platts Data")
@@ -234,6 +251,8 @@ if 'merged_df' not in st.session_state:
 
 generate_button = st.button("Merge Data (by date) & Generate Graph ->", key="generate_button")
 nymex_df = st.session_state.get("nymex_df")
+if merged_sheet_df is not None:
+    rack_df = merged_sheet_df
 
 if generate_button and any([rack_df is not None, nymex_df is not None, platts_df is not None]):
     dfs = []
@@ -316,12 +335,15 @@ if st.session_state.merged_df is not None:
             filtered_df,
             x="DATE",
             y=selected_columns,
-            labels={"DATE": "Date", "value": "Price (USD)", "variable": "Series"},
-            title="Comparison of Selected Metrics"
+            title="📈 Rack vs NYMEX vs Platts Price Trends",
+            line_shape="linear"
         )
-        fig.update_traces(line=dict(dash=line_style, width=line_width))
-        fig.update_layout(legend_title_text="Legend", hovermode="x unified")
-        fig.update_xaxes(tickformat="%m-%d-%y")
+
+        # Update line style and width
+        for trace in fig.data:
+            trace.line.width = line_width
+            trace.line.dash = line_style
+
         st.plotly_chart(fig, use_container_width=True)
-    elif filtered_df.empty:
-        st.warning("No data available in the selected date range.")
+    else:
+        st.warning("No data to display for the selected range or columns.")
