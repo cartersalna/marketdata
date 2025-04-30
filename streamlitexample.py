@@ -6,6 +6,7 @@ import io
 from io import StringIO
 import yfinance as yf
 import os
+import numpy as np
 
 st.set_page_config(page_title="Rack vs NYMEX vs Platts Viewer", layout="wide")
 st.title("📄 View Rack, NYMEX, and Platts Data")
@@ -43,10 +44,11 @@ if "merged_sheet_df" in st.session_state:
     merged_sheet_df = st.session_state["merged_sheet_df"]
 else:
     merged_sheet_df = None
+    
 if 'merged_df' not in st.session_state:
     st.session_state.merged_df = None
 
-rack_file = st.file_uploader("Upload OPIS Rack Data", type=["csv", "xls", "xlsx"])
+rack_file = st.file_uploader("Upload .xlsx or .csv file:", type=["csv", "xls", "xlsx"])
 
 selected_df = None
 
@@ -104,6 +106,15 @@ if rack_file is not None:
                     # Sort by DATE after merging
                     merged_df = merged_df.sort_values(by="DATE")
 
+                    # Replace 0s with NaN so we can clean rows and columns effectively
+                    merged_df.replace(0, np.nan, inplace=True)
+
+                    # Drop rows where all values are NaN (i.e., originally empty or all zeros)
+                    merged_df = merged_df.dropna(how="all")
+
+                    # Drop columns where all values are NaN (i.e., originally empty or all zeros)
+                    merged_df = merged_df.dropna(axis=1, how="all")
+
                     # Store merged result in session state
                     st.session_state["merged_sheet_df"] = merged_df
 
@@ -144,8 +155,6 @@ if selected_df is not None:
     else:
         st.error("Uploaded data missing 'DATE' column.")
         st.stop()
-
-
 
 if platts_file:
     st.subheader("📈 Platts Data")
